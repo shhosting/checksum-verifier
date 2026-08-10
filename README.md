@@ -7,8 +7,9 @@ an expected SHA-256, SHA-1, SHA-384, or SHA-512 hash.
 
 ## Why
 
-Most "online checksum verifier" tools ask you to upload the file to a server.
-That defeats the point of verifying a download you don't yet trust. This tool
+I wanted a GUI to verify checksums that would function on any OS and make things as simple as possible for me. 
+Many "online checksum verifier" tools ask you to upload the file to a server, 
+which defeats the point of verifying a download you don't yet trust. This tool
 never uploads anything — hashing happens entirely client-side via the
 browser's native [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/digest).
 Open DevTools → Network tab and confirm nothing leaves the browser.
