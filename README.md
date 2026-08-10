@@ -3,8 +3,7 @@
 A small, dependency-free browser tool for verifying a file's checksum against
 an expected SHA-256, SHA-1, SHA-384, or SHA-512 hash.
 
-**Live:** https://REPLACE_WITH_YOUR_USERNAME.github.io/checksum-verifier/
-*(or your custom domain, once set up)*
+**Live:** https://shhosting.net/checksum-verifier
 
 ## Why
 
