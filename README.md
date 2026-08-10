@@ -35,10 +35,11 @@ python3 -m http.server 8000
 
 ## Contributing / review
 
-This was written quickly for personal use and hasn't had independent review —
-that's exactly what I'm looking for. If you spot anything questionable in the
-hashing logic, the large-file fallback, or general code quality, please open
-an issue or PR. Particularly interested in:
+This was written quickly for personal use using several different AI agents 
+and hasn't had independent review — that's exactly what I'm looking for. 
+If you spot anything questionable in the hashing logic, the large-file 
+fallback, or general code quality, please open an issue or PR. 
+Particularly interested in:
 
 - Correctness of the Web Crypto usage
 - Edge cases in file handling (empty files, 0-byte drops, etc.)
