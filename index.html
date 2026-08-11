@@ -279,6 +279,71 @@
   .ntp-compare-result.match { color: var(--cv-good); }
   .ntp-compare-result.mismatch { color: var(--cv-bad); }
 
+  .session-log {
+    display: none;
+    margin-top: 24px;
+  }
+  .session-log.show { display: block; }
+  .session-log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .session-log-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cv-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .session-log-clear {
+    background: none;
+    border: none;
+    color: var(--cv-text-faint);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .session-log-clear:hover { color: var(--cv-bad); }
+  .session-log-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .session-log-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--cv-line);
+    border-left-width: 3px;
+    background: var(--cv-panel-raised);
+    font-size: 12px;
+  }
+  .session-log-row.match { border-left-color: var(--cv-good); }
+  .session-log-row.mismatch { border-left-color: var(--cv-bad); }
+  .session-log-status { flex-shrink: 0; font-weight: 700; }
+  .session-log-row.match .session-log-status { color: var(--cv-good); }
+  .session-log-row.mismatch .session-log-status { color: var(--cv-bad); }
+  .session-log-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--cv-text);
+    font-family: var(--font-mono);
+  }
+  .session-log-meta {
+    flex-shrink: 0;
+    color: var(--cv-text-faint);
+    font-family: var(--font-mono);
+  }
+
   .app label {
     display: block;
     font-size: 12.5px;
@@ -498,6 +563,14 @@
     </div>
   </div>
 
+  <div class="session-log" id="sessionLog">
+    <div class="session-log-header">
+      <span class="session-log-title">Session history</span>
+      <button type="button" class="session-log-clear" id="sessionLogClear">Clear</button>
+    </div>
+    <div class="session-log-list" id="sessionLogList"></div>
+  </div>
+
   <div class="foot">The browser's built-in Web Crypto API is used here - no network request is made with your file or its hash. The whole file is read into memory to hash it, so very large files can be slow or, past a point, fail outright.</div>
 </div>
   </main>
@@ -531,6 +604,9 @@
   const status = document.getElementById('status');
   const computedVal = document.getElementById('computedVal');
   const copyBtn = document.getElementById('copyBtn');
+  const sessionLog = document.getElementById('sessionLog');
+  const sessionLogList = document.getElementById('sessionLogList');
+  const sessionLogClear = document.getElementById('sessionLogClear');
 
   // 500MB: hashing still works fine on most machines, just a heads-up it may take a moment.
   const ADVISORY_BYTES = 500 * 1024 * 1024;
@@ -549,6 +625,49 @@
   let selectedFile = null;
   let cache = {}; // algo -> hex digest for current file
 
+  // In-memory only, by design — cleared on refresh. See the conversation this was built
+  // in for the reasoning: a persisted log would mean storing filenames/hashes indefinitely
+  // on whatever machine runs this, which is a real (if mild) privacy cost for a tool people
+  // use to check installers and other sensitive-ish downloads. A session list gives the
+  // "did I already check that one" scan-back value for batch verification without that cost.
+  let logEntries = []; // { time: Date, name, algo, isMatch }
+
+  function addLogEntry(name, algo, isMatch) {
+    logEntries.unshift({ time: new Date(), name, algo, isMatch });
+    renderLog();
+  }
+
+  function renderLog() {
+    sessionLog.classList.toggle('show', logEntries.length > 0);
+    sessionLogList.textContent = '';
+    logEntries.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'session-log-row ' + (entry.isMatch ? 'match' : 'mismatch');
+
+      const statusEl = document.createElement('span');
+      statusEl.className = 'session-log-status';
+      statusEl.textContent = entry.isMatch ? '✓' : '✕';
+      row.appendChild(statusEl);
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'session-log-name';
+      nameEl.textContent = entry.name;
+      row.appendChild(nameEl);
+
+      const metaEl = document.createElement('span');
+      metaEl.className = 'session-log-meta';
+      metaEl.textContent = entry.algo + ' \u00b7 ' + entry.time.toLocaleTimeString();
+      row.appendChild(metaEl);
+
+      sessionLogList.appendChild(row);
+    });
+  }
+
+  sessionLogClear.addEventListener('click', () => {
+    logEntries = [];
+    renderLog();
+  });
+
   // The native-hash compare box lives inside the (repeatedly rebuilt) native-tool panel,
   // but also needs to react to edits in the main "expected hash" field above it, which is
   // NOT rebuilt. Rather than attach a fresh listener to that persistent field on every
@@ -559,6 +678,24 @@
   let nativeCompareResultEl = null;
   let nativeCompareHintEl = null;
   let nativeCompareAlgo = null;
+  // Guards against logging duplicates: runNativeCompare fires on every keystroke, and a
+  // single paste already fires it twice (the 'input' event paste naturally triggers, plus
+  // the explicit 'paste' listener below). Only a genuinely new match/mismatch outcome
+  // should produce a new log row.
+  let nativeCompareLoggedKey = null;
+
+  // Called whenever the selected file changes (new file, or cleared). Without this, the
+  // refs above keep pointing at a previous large file's (now hidden, but still-in-DOM and
+  // still-listened-to) compare textarea, and the persistent hashInput listener below would
+  // keep re-evaluating that stale content — producing a phantom log entry attributed to
+  // whatever file is *now* selected, not the one the pasted text actually belongs to.
+  function resetNativeCompareState() {
+    nativePasteInput = null;
+    nativeCompareResultEl = null;
+    nativeCompareHintEl = null;
+    nativeCompareAlgo = null;
+    nativeCompareLoggedKey = null;
+  }
 
   function runNativeCompare() {
     if (!nativePasteInput) return;
@@ -584,6 +721,12 @@
     const isMatch = extracted === expected;
     nativeCompareResultEl.textContent = isMatch ? '✓ Match — file is intact' : '✕ No match — do not trust this file';
     nativeCompareResultEl.classList.add('show', isMatch ? 'match' : 'mismatch');
+
+    const key = extracted + '|' + expected + '|' + nativeCompareAlgo;
+    if (key !== nativeCompareLoggedKey && selectedFile) {
+      nativeCompareLoggedKey = key;
+      addLogEntry(selectedFile.name, nativeCompareAlgo, isMatch);
+    }
   }
 
   function buildCompareSection(algo) {
@@ -615,6 +758,7 @@
     nativeCompareResultEl = resultEl;
     nativeCompareHintEl = hint;
     nativeCompareAlgo = algo;
+    nativeCompareLoggedKey = null;
 
     input.addEventListener('input', runNativeCompare);
     input.addEventListener('paste', () => setTimeout(runNativeCompare, 0));
@@ -858,6 +1002,7 @@
   function setFile(file) {
     selectedFile = file;
     cache = {};
+    resetNativeCompareState();
     result.classList.remove('show', 'match', 'mismatch');
     msg.textContent = '';
     fileName.textContent = file.name;
@@ -907,6 +1052,7 @@
     e.stopPropagation();
     selectedFile = null;
     cache = {};
+    resetNativeCompareState();
     fileInput.value = '';
     fileRow.classList.remove('show');
     result.classList.remove('show', 'match', 'mismatch');
@@ -930,9 +1076,6 @@
     try {
       buffer = await file.arrayBuffer();
     } catch (err) {
-      if (err.name === 'QuotaExceededError' || err instanceof RangeError) {
-        throw new Error('MEMORY_LIMIT');
-      }
       throw new Error('READ_FAILED');
     }
 
@@ -982,6 +1125,7 @@
       result.classList.toggle('mismatch', !isMatch);
       status.textContent = isMatch ? '✓ Match — file is intact' : '✕ No match — do not trust this file';
       computedVal.textContent = computed;
+      addLogEntry(selectedFile.name, algo, isMatch);
     } catch (err) {
       const reason = err && err.message;
       if (reason === 'READ_FAILED') {
