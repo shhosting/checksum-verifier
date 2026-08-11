@@ -232,6 +232,53 @@
   }
   .ntp-label:first-of-type { margin-top: 0; }
 
+  .ntp-toggle-row { margin-top: 10px; }
+  .ntp-toggle-btn {
+    background: none;
+    border: none;
+    color: var(--cv-warn-text);
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .ntp-toggle-btn:hover { opacity: 0.8; }
+
+  .ntp-compare {
+    display: none;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--cv-warn-border);
+  }
+  .ntp-compare.show { display: block; }
+  .ntp-compare label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--cv-text-dim);
+    margin: 0 0 7px;
+  }
+  .ntp-compare-hint {
+    min-height: 16px;
+    font-size: 12px;
+    color: var(--cv-text-faint);
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .ntp-compare-result {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .ntp-compare-result.show { display: flex; }
+  .ntp-compare-result.match { color: var(--cv-good); }
+  .ntp-compare-result.mismatch { color: var(--cv-bad); }
+
   .app label {
     display: block;
     font-size: 12.5px;
@@ -241,7 +288,7 @@
   }
   .app label:first-of-type { margin-top: 4px; }
 
-  .app select, .app input[type="text"] {
+  .app select, .app input[type="text"], .app textarea {
     width: 100%;
     background: var(--cv-panel-raised);
     border: 1px solid var(--cv-line);
@@ -252,7 +299,12 @@
     font-family: var(--font-mono);
     outline-offset: 2px;
   }
-  .app select:focus-visible, .app input[type="text"]:focus-visible { outline: 2px solid var(--cv-accent); border-color: var(--cv-accent-hover); }
+  .app select:focus-visible, .app input[type="text"]:focus-visible, .app textarea:focus-visible { outline: 2px solid var(--cv-accent); border-color: var(--cv-accent-hover); }
+  .app textarea {
+    resize: vertical;
+    min-height: 60px;
+    line-height: 1.5;
+  }
   .app select { font-family: inherit; cursor: pointer; }
   .app input[type="text"]::placeholder { color: var(--cv-text-faint); font-family: inherit; }
   .app input[type="text"].invalid { border-color: var(--cv-bad); }
@@ -497,6 +549,82 @@
   let selectedFile = null;
   let cache = {}; // algo -> hex digest for current file
 
+  // The native-hash compare box lives inside the (repeatedly rebuilt) native-tool panel,
+  // but also needs to react to edits in the main "expected hash" field above it, which is
+  // NOT rebuilt. Rather than attach a fresh listener to that persistent field on every
+  // panel rebuild (which would stack duplicate listeners over time), these refs get
+  // repointed each rebuild and a single listener on the expected-hash field reads through
+  // them — see the one-time hashInput listener further down.
+  let nativePasteInput = null;
+  let nativeCompareResultEl = null;
+  let nativeCompareHintEl = null;
+  let nativeCompareAlgo = null;
+
+  function runNativeCompare() {
+    if (!nativePasteInput) return;
+
+    nativeCompareResultEl.classList.remove('show', 'match', 'mismatch');
+    nativeCompareHintEl.textContent = '';
+
+    if (!nativePasteInput.value.trim()) return; // nothing pasted yet — stay quiet
+
+    const extracted = extractHashFromPaste(nativePasteInput.value, nativeCompareAlgo);
+    if (!extracted) {
+      nativeCompareHintEl.textContent = `Couldn\u2019t find a ${nativeCompareAlgo} hash in that text — paste the full command output.`;
+      return;
+    }
+
+    const expected = normalizeHash(hashInput.value);
+    const expectedCheck = validateHash(expected, nativeCompareAlgo);
+    if (!expectedCheck.valid) {
+      nativeCompareHintEl.textContent = 'Paste the expected hash above first.';
+      return;
+    }
+
+    const isMatch = extracted === expected;
+    nativeCompareResultEl.textContent = isMatch ? '✓ Match — file is intact' : '✕ No match — do not trust this file';
+    nativeCompareResultEl.classList.add('show', isMatch ? 'match' : 'mismatch');
+  }
+
+  function buildCompareSection(algo) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ntp-compare';
+
+    const label = document.createElement('label');
+    label.setAttribute('for', 'nativeHashPaste');
+    label.textContent = 'Paste the hash the command printed';
+    wrap.appendChild(label);
+
+    const input = document.createElement('textarea');
+    input.id = 'nativeHashPaste';
+    input.rows = 3;
+    input.placeholder = 'Paste the command\u2019s output here';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    wrap.appendChild(input);
+
+    const hint = document.createElement('div');
+    hint.className = 'ntp-compare-hint';
+    wrap.appendChild(hint);
+
+    const resultEl = document.createElement('div');
+    resultEl.className = 'ntp-compare-result';
+    wrap.appendChild(resultEl);
+
+    nativePasteInput = input;
+    nativeCompareResultEl = resultEl;
+    nativeCompareHintEl = hint;
+    nativeCompareAlgo = algo;
+
+    input.addEventListener('input', runNativeCompare);
+    input.addEventListener('paste', () => setTimeout(runNativeCompare, 0));
+
+    return {
+      el: wrap,
+      reveal() { wrap.classList.add('show'); }
+    };
+  }
+
   function formatBytes(bytes) {
     if (bytes < 1024) return bytes + ' B';
     const units = ['KB', 'MB', 'GB', 'TB'];
@@ -523,6 +651,37 @@
       };
     }
     return { valid: true, empty: false, message: '' };
+  }
+
+  // Pulls a hex digest of the expected length out of raw pasted command output.
+  // Two formats to handle: a single unbroken hex token (shasum, sha256sum, Get-FileHash —
+  // "<hash>  filename" or just "<hash>"), or certutil's byte-paired format, which prints
+  // the digest as space-separated 2-char pairs ("3a 5f 8b ...") surrounded by header/footer
+  // text. Whichever it is, the real digest is the only run of hex tokens that adds up to
+  // exactly the expected length — surrounding words (filenames, "CertUtil:", etc.) either
+  // aren't pure hex or aren't the right length, so they don't collide with either check.
+  function extractHashFromPaste(text, algo) {
+    const expectedLen = HASH_LENGTHS[algo];
+    if (!text) return null;
+    const tokens = text.trim().split(/\s+/).filter(Boolean);
+
+    for (const t of tokens) {
+      const lower = t.toLowerCase();
+      if (/^[0-9a-f]+$/.test(lower) && lower.length === expectedLen) return lower;
+    }
+
+    let run = '';
+    for (const t of tokens) {
+      const lower = t.toLowerCase();
+      if (/^[0-9a-f]{2}$/.test(lower)) {
+        run += lower;
+        if (run.length === expectedLen) return run;
+      } else {
+        run = '';
+      }
+    }
+
+    return null;
   }
 
   function refreshHashHint() {
@@ -567,8 +726,22 @@
     return "'" + name.replace(/'/g, "'\\''") + "'";
   }
 
-  // Builds {label, cmd} entries for the native-tool panel. fileNameStr comes from the
-  // browser's File object (attacker-controllable if a malicious filename is crafted),
+  // Best-effort OS detection to filter the native-command list down to what's actually
+  // runnable here. navigator.userAgentData is the modern Client Hints source (Chromium);
+  // navigator.platform is the older, broadly-supported fallback. Neither is guaranteed
+  // (e.g. reduced-fingerprinting browsers may withhold both), so an unrecognized result
+  // just means "show everything" rather than guessing wrong.
+  function detectOS() {
+    const uaDataPlatform = navigator.userAgentData && navigator.userAgentData.platform;
+    const raw = (uaDataPlatform || navigator.platform || navigator.userAgent || '').toLowerCase();
+    if (raw.includes('win')) return 'windows';
+    if (raw.includes('mac')) return 'macos';
+    if (raw.includes('linux') || raw.includes('x11')) return 'linux';
+    return null;
+  }
+
+  // Builds {label, cmd, platform} entries for the native-tool panel. fileNameStr comes from
+  // the browser's File object (attacker-controllable if a malicious filename is crafted),
   // so it is only ever inserted via textContent below — never via innerHTML.
   function buildNativeCommands(fileNameStr, algo) {
     const cli = ALGO_CLI[algo] || ALGO_CLI['SHA-256'];
@@ -576,10 +749,10 @@
     const cmdName = quoteForCmd(fileNameStr);
     const posixName = quoteForPosixShell(fileNameStr);
     return [
-      { label: 'Windows — PowerShell', cmd: `certutil -hashfile ${psName} ${cli.certutil}` },
-      { label: 'Windows — Command Prompt', cmd: `certutil -hashfile ${cmdName} ${cli.certutil}` },
-      { label: 'macOS — Terminal', cmd: `shasum -a ${cli.shasum} ${posixName}` },
-      { label: 'Linux — Terminal', cmd: `${cli.coreutils} ${posixName}` }
+      { label: 'Windows — PowerShell', cmd: `certutil -hashfile ${psName} ${cli.certutil}`, platform: 'windows' },
+      { label: 'Windows — Command Prompt', cmd: `certutil -hashfile ${cmdName} ${cli.certutil}`, platform: 'windows' },
+      { label: 'macOS — Terminal', cmd: `shasum -a ${cli.shasum} ${posixName}`, platform: 'macos' },
+      { label: 'Linux — Terminal', cmd: `${cli.coreutils} ${posixName}`, platform: 'linux' }
     ];
   }
 
@@ -596,32 +769,70 @@
     desc.textContent = 'It\u2019s safer to verify it with a native command-line tool instead. Run one of these from the folder containing the file (browsers don\u2019t expose the full file path, for security reasons):';
     nativeToolPanel.appendChild(desc);
 
-    buildNativeCommands(fileNameStr, algo).forEach(entry => {
-      const label = document.createElement('div');
-      label.className = 'ntp-label';
-      label.textContent = entry.label;
-      nativeToolPanel.appendChild(label);
+    const allEntries = buildNativeCommands(fileNameStr, algo);
+    const detectedOS = detectOS();
+    // If we can't tell what OS this is, there's nothing sensible to filter by — show
+    // everything and skip the toggle entirely rather than offer a button that does nothing.
+    let showingAll = !detectedOS;
 
-      const row = document.createElement('div');
-      row.className = 'code-row';
+    const commandsWrap = document.createElement('div');
+    nativeToolPanel.appendChild(commandsWrap);
 
-      const code = document.createElement('div');
-      code.className = 'val';
-      code.textContent = entry.cmd;
+    const compareSection = buildCompareSection(algo);
 
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = 'Copy';
-      btn.addEventListener('click', async () => {
-        const ok = await copyToClipboard(entry.cmd);
-        btn.textContent = ok ? 'Copied' : 'Failed to copy';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1400);
+    function renderCommandList() {
+      commandsWrap.textContent = '';
+      const entries = showingAll ? allEntries : allEntries.filter(e => e.platform === detectedOS);
+      entries.forEach(entry => {
+        const label = document.createElement('div');
+        label.className = 'ntp-label';
+        label.textContent = entry.label;
+        commandsWrap.appendChild(label);
+
+        const row = document.createElement('div');
+        row.className = 'code-row';
+
+        const code = document.createElement('div');
+        code.className = 'val';
+        code.textContent = entry.cmd;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Copy';
+        btn.addEventListener('click', async () => {
+          const ok = await copyToClipboard(entry.cmd);
+          btn.textContent = ok ? 'Copied' : 'Failed to copy';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1400);
+          if (ok) compareSection.reveal();
+        });
+
+        row.appendChild(code);
+        row.appendChild(btn);
+        commandsWrap.appendChild(row);
+      });
+    }
+
+    renderCommandList();
+
+    if (detectedOS) {
+      const toggleRow = document.createElement('div');
+      toggleRow.className = 'ntp-toggle-row';
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'ntp-toggle-btn';
+      toggleBtn.textContent = 'Show all options';
+      toggleBtn.addEventListener('click', () => {
+        showingAll = !showingAll;
+        toggleBtn.textContent = showingAll ? 'Show fewer options' : 'Show all options';
+        renderCommandList();
       });
 
-      row.appendChild(code);
-      row.appendChild(btn);
-      nativeToolPanel.appendChild(row);
-    });
+      toggleRow.appendChild(toggleBtn);
+      nativeToolPanel.appendChild(toggleRow);
+    }
+
+    nativeToolPanel.appendChild(compareSection.el);
   }
 
   function updateLargeFileUI() {
@@ -710,7 +921,9 @@
   });
 
   hashInput.addEventListener('input', refreshHashHint);
+  hashInput.addEventListener('input', runNativeCompare);
   hashInput.addEventListener('paste', () => setTimeout(refreshHashHint, 0));
+  hashInput.addEventListener('paste', () => setTimeout(runNativeCompare, 0));
 
   async function hashFile(file, algo) {
     let buffer;
