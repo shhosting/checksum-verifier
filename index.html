@@ -930,6 +930,9 @@
     try {
       buffer = await file.arrayBuffer();
     } catch (err) {
+      if (err.name === 'QuotaExceededError' || err instanceof RangeError) {
+        throw new Error('MEMORY_LIMIT');
+      }
       throw new Error('READ_FAILED');
     }
 
