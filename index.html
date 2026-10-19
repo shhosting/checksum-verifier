@@ -54,7 +54,7 @@
     --cv-code-row-bg: rgba(15, 23, 42, 0.05);
 
     --cv-radius: 10px;
-    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+    --font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -426,7 +426,16 @@
     max-width: none;
     margin: 0 auto 5px;
     text-align: center;
+    font-size: 0.8rem;
     opacity: 0.55;
+  }
+
+  .ai-disclaimer .footer-version {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -487,7 +496,7 @@
   <div class="foot">The browser's built-in Web Crypto API is used here - no network request is made with your file or its hash. The whole file is read into memory to hash it, so very large files can be slow or, past a point, fail outright.</div>
 </div>
   </main>
-  <p class="ai-disclaimer">This tool’s code is <a href="https://github.com/shhosting/checksum-verifier">open source</a> &middot; v1.0.0</p>
+  <p class="ai-disclaimer">This tool’s code is <a href="https://github.com/shhosting/checksum-verifier">open source</a> <span class="footer-version">&bull; v1.0.0</span></p>
 
   <script src="/assets/js/site-shell.js" defer></script>
 <script>
